@@ -205,15 +205,15 @@ graph TB
     APIServer --> MultiServer
 
     %% Styling
-    classDef inputClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef encodingClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef runnerClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
-    classDef networkClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef schedulerClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    classDef optimizationClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-    classDef processingClass fill:#e3f2fd,stroke:#0d47a1,stroke-width:2px
-    classDef outputClass fill:#fff8e1,stroke:#ff6f00,stroke-width:2px
-    classDef serverClass fill:#fafafa,stroke:#424242,stroke-width:2px
+    classDef inputClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#000000
+    classDef encodingClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000000
+    classDef runnerClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px,color:#000000
+    classDef networkClass fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000000
+    classDef schedulerClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#000000
+    classDef optimizationClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#000000
+    classDef processingClass fill:#e3f2fd,stroke:#0d47a1,stroke-width:2px,color:#000000
+    classDef outputClass fill:#fff8e1,stroke:#ff6f00,stroke-width:2px,color:#000000
+    classDef serverClass fill:#fafafa,stroke:#424242,stroke-width:2px,color:#000000
 
     class TextInput,ImageInput,AudioInput,Config inputClass
     class TextEnc,ImageEnc,AudioEnc,VAEEnc encodingClass
