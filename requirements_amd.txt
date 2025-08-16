@@ -1,0 +1,43 @@
+# AMD GPU Requirements for LightX2V
+# This file contains dependencies optimized for AMD MI250 GPUs with ROCm support
+
+# ROCm-compatible PyTorch (install from ROCm index)
+# Use this installation command:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.1
+torch==2.6.0+rocm6.1
+torchvision==0.21.0+rocm6.1
+torchaudio==2.6.0+rocm6.1
+
+# ROCm-compatible vLLM
+# Install from nscale ROCm-compatible repository:
+# git clone https://github.com/nscaledev/vllm-project-vllm.git
+# cd vllm-project-vllm && pip install -e .
+# OR use the docker image: registry.nscale.com/inferencing/vllm-rocm-compile:nscale-torch-compile-image-b719ec6
+# vllm  # Install manually from ROCm-compatible source
+
+# Core dependencies (compatible with ROCm)
+packaging
+ninja
+diffusers
+transformers
+tokenizers
+accelerate
+safetensors
+opencv-python
+numpy
+imageio
+imageio-ffmpeg
+einops
+loguru
+ftfy
+easydict
+gradio
+aiohttp
+pydantic
+
+# Optional quantization libraries (install if available for ROCm)
+# sgl-kernel  # Install manually if ROCm-compatible version available
+# qtorch      # Install manually if ROCm-compatible version available
+
+# Note: xformers is disabled via environment variables for AMD compatibility
+# Note: Some packages may need manual installation from ROCm-compatible sources

@@ -1,0 +1,74 @@
+# LightX2V Docker Image for AMD MI250 GPUs with ROCm Support
+# Base image includes ROCm-compatible vLLM and PyTorch
+FROM registry.nscale.com/inferencing/vllm-rocm-compile:nscale-torch-compile-image-b719ec6 AS base
+
+WORKDIR /app
+
+# Set environment variables for AMD GPU compatibility
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# AMD GPU environment variables for optimal performance
+ENV XFORMERS_FORCE_DISABLE_TRITON=1
+ENV DISABLE_XFORMERS=1
+ENV AMD_SERIALIZE_KERNEL=1
+ENV HIP_VISIBLE_DEVICES=0,1,2,3
+ENV ROCM_PATH=/opt/rocm
+ENV HSA_OVERRIDE_GFX_VERSION=9.0.0
+
+# Set PyTorch HIP memory allocator for better performance
+ENV PYTORCH_HIP_ALLOC_CONF=expandable_segments:False
+
+# Use tsinghua mirror for faster package downloads (optional)
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true \
+    && sed -i 's|http://security.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' /etc/apt/sources.list || true
+
+# Install system dependencies required for LightX2V
+RUN apt-get update && apt-get install -y \
+    vim tmux zip unzip wget git build-essential \
+    curl iproute2 ffmpeg libsm6 libxext6 \
+    kmod ccache libnuma-dev ca-certificates \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Configure pip to use tsinghua mirror (optional)
+RUN pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple || true
+
+# Install additional dependencies for LightX2V
+RUN pip install --no-cache-dir \
+    packaging ninja cmake scikit-build-core \
+    diffusers transformers tokenizers accelerate safetensors \
+    opencv-python numpy imageio imageio-ffmpeg \
+    einops loguru ftfy easydict gradio aiohttp pydantic
+
+# Install ROCm-compatible flash-attention for AMD GPUs
+# Note: This may need adjustment based on ROCm version compatibility
+RUN git clone https://github.com/ROCm/flash-attention.git --recursive || \
+    git clone https://github.com/Dao-AILab/flash-attention.git --recursive
+RUN cd flash-attention && \
+    python setup.py install || echo "Flash attention installation failed, continuing without it" && \
+    rm -rf build
+
+# Install additional ROCm-compatible kernels if available
+# These are optional and may not be available for all ROCm versions
+RUN git clone https://github.com/sgl-project/sglang.git && \
+    cd sglang/sgl-kernel && \
+    (make build && make clean) || echo "SGL kernel build failed, continuing without it"
+
+# Copy LightX2V source code
+COPY . /workspace/
+WORKDIR /workspace
+
+# Make AMD-specific scripts executable
+RUN chmod +x run_amd_server.sh test_amd_gpu.py || true
+RUN find models -name "run_server.sh" -exec chmod +x {} \; || true
+
+# Expose default API port
+EXPOSE 8000
+
+# Health check to verify AMD GPU accessibility
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python3 -c "import torch; assert torch.cuda.is_available(); assert torch.cuda.device_count() > 0" || exit 1
+
+# Default command to run the AMD-optimized server
+CMD ["./run_amd_server.sh"]

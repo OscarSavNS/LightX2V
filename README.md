@@ -108,6 +108,76 @@ For detailed performance metrics and comparisons, please refer to our [benchmark
 - [Service Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/deploy_service.html) - Production API service deployment
 - [Lora Model Deployment](https://lightx2v-en.readthedocs.io/en/latest/deploy_guides/lora_deploy.html) - Flexible Lora deployment
 
+## 🔥 AMD GPU Support (MI250 Series)
+
+**LightX2V now supports AMD MI250 GPUs with full feature parity!**
+
+### 🚀 **Quick Start - AMD GPU**
+
+Choose your preferred deployment method:
+
+#### **Option 1: Docker Deployment (Recommended)**
+```bash
+# Using ROCm-compatible vLLM base image
+docker-compose -f docker-compose_amd.yml up -d
+
+# Or build custom AMD image
+docker build -f Dockerfile_amd -t lightx2v:amd .
+```
+
+#### **Option 2: Automated Setup**
+```bash
+# Download and run the automated setup script
+./setup_amd.sh
+
+# Start the server
+./run_amd_server.sh
+```
+
+#### **Option 3: Manual Installation**
+```bash
+# Install ROCm PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.1
+
+# Install ROCm-compatible vLLM
+git clone https://github.com/nscaledev/vllm-project-vllm.git
+cd vllm-project-vllm && pip install -e .
+
+# Install LightX2V dependencies
+pip install -r requirements_amd.txt
+
+# Set environment variables and run
+source ~/.lightx2v_amd_env
+./run_amd_server.sh
+```
+
+### 🎯 **Features Supported on AMD**
+- ✅ **Full vLLM Integration**: Prompt enhancement and quantization operations
+- ✅ **MI250 Optimization**: Tested on AMD Instinct MI250X GPUs
+- ✅ **ROCm 6.1 Support**: Latest ROCm compatibility
+- ✅ **Multi-GPU**: Support for all 4 MI250 GPU units
+- ✅ **Docker Ready**: Production-ready containerized deployment
+- ✅ **Feature Parity**: Same functionality as CUDA version
+
+### 📋 **System Requirements**
+- **Hardware**: AMD MI250, MI250X, or compatible ROCm GPUs
+- **Software**: ROCm 6.1+, Python 3.10+
+- **Memory**: 16GB+ RAM, 32GB+ VRAM (for 14B models)
+- **Docker**: ROCm-compatible base image from nscale
+
+### 🔧 **Performance Notes**
+- **Environment Variables**: Optimized for MI250 architecture (gfx90a)
+- **Memory Management**: HIP allocator configuration for best performance
+- **xformers**: Disabled for compatibility (uses PyTorch native attention)
+
+### 📖 **Detailed Documentation**
+For comprehensive AMD GPU setup instructions, troubleshooting, and performance optimization, see: **[README_AMD.md](README_AMD.md)**
+
+### 🐛 **Troubleshooting**
+- **GPU Detection**: Verify with `rocm-smi` and `python3 test_amd_gpu.py`
+- **Memory Issues**: Adjust `HIP_VISIBLE_DEVICES` and memory settings
+- **Performance**: Check ROCm version and GPU architecture compatibility
+
 ## 🧾 Contributing Guidelines
 
 We maintain code quality through automated pre-commit hooks to ensure consistent formatting across the project.

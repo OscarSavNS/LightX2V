@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  lightx2v-amd:
+    image: registry.nscale.com/inferencing/vllm-rocm-compile:nscale-torch-compile-image-b719ec6
+    container_name: lightx2v-amd-server
+    
+    # Build from local Dockerfile_amd if you want to use the custom image
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile_amd
+    #   tags:
+    #     - lightx2v:amd-latest
+    
+    # AMD GPU device access
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    
+    # Security options for AMD GPU access
+    security_opt:
+      - seccomp:unconfined
+    
+    # Group access for AMD GPUs
+    group_add:
+      - video
+      - render
+    
+    # Environment variables for AMD GPU optimization
+    environment:
+      - XFORMERS_FORCE_DISABLE_TRITON=1
+      - DISABLE_XFORMERS=1
+      - AMD_SERIALIZE_KERNEL=1
+      - HIP_VISIBLE_DEVICES=0,1,2,3
+      - ROCM_PATH=/opt/rocm
+      - HSA_OVERRIDE_GFX_VERSION=9.0.0
+      - PYTORCH_HIP_ALLOC_CONF=expandable_segments:False
+      
+      # Model configuration
+      - MODEL_PATH=/workspace/models/Wan2.1-I2V-14B-480P-StepDistill-CfgDistill-Lightx2v
+      - MODEL_CLS=wan2.1_distill
+      - TASK=i2v
+      - HOST=0.0.0.0
+      - PORT=8000
+    
+    # Port mapping
+    ports:
+      - "8000:8000"
+    
+    # Volume mounts
+    volumes:
+      # Mount the entire LightX2V directory
+      - .:/workspace
+      
+      # Mount model directory (adjust path as needed)
+      - ./models:/workspace/models
+      
+      # Mount output directory for generated videos
+      - ./outputs:/workspace/outputs
+      
+      # Optional: Mount custom configs
+      - ./configs:/workspace/configs
+      
+      # ROCm libraries (if needed)
+      - /opt/rocm:/opt/rocm:ro
+    
+    # Working directory
+    working_dir: /workspace
+    
+    # Custom command to run LightX2V with AMD optimizations
+    command: >
+      bash -c "
+        echo 'Setting up LightX2V for AMD GPUs...' &&
+        pip install -r requirements_amd.txt &&
+        chmod +x run_amd_server.sh &&
+        ./run_amd_server.sh
+      "
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import torch; assert torch.cuda.is_available(); assert torch.cuda.device_count() > 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          memory: 32G
+        reservations:
+          memory: 16G
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+  # Optional: Prompt enhancer service (if using separate model)
+  lightx2v-prompt-enhancer:
+    image: registry.nscale.com/inferencing/vllm-rocm-compile:nscale-torch-compile-image-b719ec6
+    container_name: lightx2v-prompt-enhancer
+    
+    # AMD GPU device access
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    
+    security_opt:
+      - seccomp:unconfined
+    
+    group_add:
+      - video
+      - render
+    
+    environment:
+      - XFORMERS_FORCE_DISABLE_TRITON=1
+      - DISABLE_XFORMERS=1
+      - AMD_SERIALIZE_KERNEL=1
+      - HIP_VISIBLE_DEVICES=0
+      - ROCM_PATH=/opt/rocm
+    
+    ports:
+      - "9001:9001"
+    
+    volumes:
+      - .:/workspace
+      - ./models:/workspace/models
+    
+    working_dir: /workspace
+    
+    # Run prompt enhancer service
+    command: >
+      bash -c "
+        pip install -r requirements_amd.txt &&
+        python3 -m lightx2v.common.apis.prompt_enhancer --model_path /workspace/models/your-llm-model --port 9001
+      "
+    
+    # Only start if you have a separate LLM model for prompt enhancement
+    profiles:
+      - prompt-enhancer
+    
+    restart: unless-stopped
+
+# Optional: Networks for service communication
+networks:
+  default:
+    driver: bridge
