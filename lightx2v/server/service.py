@@ -10,7 +10,7 @@ import httpx
 import torch.multiprocessing as mp
 from loguru import logger
 
-from ..infer import init_runner
+# Lazy import: from ..infer import init_runner
 from ..utils.set_config import set_config
 from .audio_utils import is_base64_audio, save_base64_audio
 from .config import server_config
@@ -197,21 +197,84 @@ class FileService:
 
 
 def _distributed_inference_worker(rank, world_size, master_addr, master_port, args, shared_data, task_event, result_event):
+    import time
     task_data = None
     worker = None
 
     try:
-        logger.info(f"Process {rank}/{world_size - 1} initializing distributed inference service...")
-
+        worker_start_time = time.time()
+        logger.info(f"🚀 Process {rank}/{world_size - 1} starting distributed inference worker initialization...")
+        
+        # Log initial system state
+        logger.info(f"📊 Process {rank} importing torch...")
+        torch_start = time.time()
+        import torch
+        torch_time = time.time() - torch_start
+        logger.info(f"✅ Process {rank} torch imported in {torch_time:.1f}s")
+        
+        if torch.cuda.is_available():
+            logger.info(f"💾 Process {rank} initial GPU memory: {torch.cuda.memory_allocated()/1024**3:.2f}GB / {torch.cuda.get_device_properties(0).total_memory/1024**3:.1f}GB")
+        else:
+            logger.warning(f"⚠️ Process {rank} CUDA not available!")
+        
+        logger.info(f"🌐 Process {rank} creating distributed worker (master: {master_addr}:{master_port})...")
+        worker_create_start = time.time()
         worker = create_distributed_worker(rank, world_size, master_addr, master_port)
+        worker_create_time = time.time() - worker_create_start
+        logger.info(f"✅ Process {rank} distributed worker created in {worker_create_time:.1f}s")
+        
+        logger.info(f"🔄 Process {rank} initializing distributed worker...")
+        worker_init_start = time.time()
         if not worker.init():
             raise RuntimeError(f"Rank {rank} distributed environment initialization failed")
+        worker_init_time = time.time() - worker_init_start
+        logger.info(f"✅ Process {rank} distributed worker initialized in {worker_init_time:.1f}s")
 
+        logger.info(f"⚙️  Process {rank} setting up configuration...")
+        config_start = time.time()
         config = set_config(args)
-        logger.info(f"Rank {rank} config: {config}")
+        config_time = time.time() - config_start
+        logger.info(f"✅ Process {rank} config setup completed in {config_time:.1f}s")
+        logger.info(f"📋 Process {rank} config: model_cls={config.model_cls}, model_path={config.model_path}")
 
-        runner = init_runner(config)
-        logger.info(f"Process {rank}/{world_size - 1} distributed inference service initialization completed")
+        logger.info(f"🔄 Process {rank} initializing runner (this may take several minutes for large models)...")
+        runner_init_start = time.time()
+        
+        # Lazy import of heavy ML modules only when needed
+        logger.info(f"📦 Process {rank} lazy importing init_runner from ..infer...")
+        import_start = time.time()
+        try:
+            from ..infer import init_runner
+            import_time = time.time() - import_start
+            logger.info(f"✅ Process {rank} init_runner imported in {import_time:.1f}s")
+        except Exception as e:
+            import_time = time.time() - import_start
+            logger.error(f"❌ Process {rank} failed to import init_runner after {import_time:.1f}s: {e}")
+            import traceback
+            logger.error(f"📜 Traceback: {traceback.format_exc()}")
+            raise
+        
+        logger.info(f"🏗️ Process {rank} calling init_runner(config)...")
+        init_start = time.time()
+        try:
+            runner = init_runner(config)
+            init_time = time.time() - init_start
+            logger.info(f"✅ Process {rank} init_runner completed in {init_time:.1f}s")
+        except Exception as e:
+            init_time = time.time() - init_start
+            logger.error(f"❌ Process {rank} init_runner failed after {init_time:.1f}s: {e}")
+            import traceback
+            logger.error(f"📜 Traceback: {traceback.format_exc()}")
+            raise
+        runner_init_time = time.time() - runner_init_start
+        logger.info(f"✅ Process {rank}/{world_size - 1} runner initialization completed in {runner_init_time:.1f}s")
+        
+        # Log final memory state
+        if torch.cuda.is_available():
+            logger.info(f"💾 Process {rank} final GPU memory: {torch.cuda.memory_allocated()/1024**3:.2f}GB / {torch.cuda.get_device_properties(0).total_memory/1024**3:.1f}GB")
+        
+        total_worker_time = time.time() - worker_start_time
+        logger.info(f"🎯 Process {rank}/{world_size - 1} ready for inference tasks (total startup: {total_worker_time:.1f}s)")
 
         while True:
             if not task_event.wait(timeout=1.0):
@@ -273,7 +336,9 @@ def _distributed_inference_worker(rank, world_size, master_addr, master_port, ar
     except KeyboardInterrupt:
         logger.info(f"Process {rank} received KeyboardInterrupt, gracefully exiting")
     except Exception as e:
-        logger.exception(f"Distributed inference service process {rank} startup failed: {str(e)}")
+        import traceback
+        logger.exception(f"❌ Distributed inference service process {rank} startup failed: {str(e)}")
+        logger.error(f"📜 Process {rank} traceback: {traceback.format_exc()}")
         if rank == 0:
             shared_data["result"] = {
                 "task_id": "startup",
@@ -300,39 +365,56 @@ class DistributedInferenceService:
         self.is_running = False
 
     def start_distributed_inference(self, args) -> bool:
+        import time
+        start_time = time.time()
+        
+        logger.info("📋 Processing LoRA configuration...")
         if hasattr(args, "lora_path") and args.lora_path:
             args.lora_configs = [{"path": args.lora_path, "strength": getattr(args, "lora_strength", 1.0)}]
             delattr(args, "lora_path")
             if hasattr(args, "lora_strength"):
                 delattr(args, "lora_strength")
+            logger.info("✅ LoRA configuration processed")
+        else:
+            logger.info("⏭️ No LoRA configuration to process")
 
         self.args = args
         if self.is_running:
-            logger.warning("Distributed inference service is already running")
+            logger.warning("⚠️ Distributed inference service is already running")
             return True
 
         nproc_per_node = args.nproc_per_node
+        logger.info(f"🎯 Target processes per node: {nproc_per_node}")
         if nproc_per_node <= 0:
-            logger.error("nproc_per_node must be greater than 0")
+            logger.error("❌ nproc_per_node must be greater than 0")
             return False
 
         try:
+            logger.info("🌐 Setting up distributed environment...")
             master_addr = server_config.master_addr
             master_port = server_config.find_free_master_port()
-            logger.info(f"Distributed inference service Master Addr: {master_addr}, Master Port: {master_port}")
+            logger.info(f"🌐 Distributed inference service Master Addr: {master_addr}, Master Port: {master_port}")
 
             # Create shared data structures
+            logger.info("📊 Creating shared memory structures...")
             self.manager = mp.Manager()
             self.shared_data = self.manager.dict()
             self.task_event = self.manager.Event()
             self.result_event = self.manager.Event()
+            logger.info("✅ Shared memory structures created")
 
             # Initialize shared data
+            logger.info("🔄 Initializing shared data...")
             self.shared_data["current_task"] = None
             self.shared_data["result"] = None
             self.shared_data["stop"] = False
+            logger.info("✅ Shared data initialized")
 
+            logger.info(f"🚀 Spawning {nproc_per_node} worker processes...")
+            process_spawn_start = time.time()
             for rank in range(nproc_per_node):
+                logger.info(f"🚀 Creating process {rank}/{nproc_per_node-1}...")
+                process_start = time.time()
                 p = mp.Process(
                     target=_distributed_inference_worker,
                     args=(
@@ -349,9 +431,14 @@ class DistributedInferenceService:
                 )
                 p.start()
                 self.processes.append(p)
-
+                process_time = time.time() - process_start
+                logger.info(f"✅ Process {rank} started in {process_time:.1f}s (PID: {p.pid})")
+            
+            process_spawn_time = time.time() - process_spawn_start
             self.is_running = True
-            logger.info(f"Distributed inference service started successfully with {nproc_per_node} processes")
+            total_time = time.time() - start_time
+            logger.info(f"✅ All {nproc_per_node} processes spawned in {process_spawn_time:.1f}s")
+            logger.info(f"🎯 Distributed inference service started successfully in {total_time:.1f}s")
             return True
 
         except Exception as e:

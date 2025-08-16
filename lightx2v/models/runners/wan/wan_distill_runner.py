@@ -16,22 +16,63 @@ class WanDistillRunner(WanRunner):
         super().__init__(config)
 
     def load_transformer(self):
-        if self.config.get("lora_configs") and self.config.lora_configs:
-            model = WanModel(
-                self.config.model_path,
-                self.config,
-                self.init_device,
-            )
-            lora_wrapper = WanLoraWrapper(model)
-            for lora_config in self.config.lora_configs:
-                lora_path = lora_config["path"]
-                strength = lora_config.get("strength", 1.0)
-                lora_name = lora_wrapper.load_lora(lora_path)
-                lora_wrapper.apply_lora(lora_name, strength)
-                logger.info(f"Loaded LoRA: {lora_name} with strength: {strength}")
-        else:
-            model = WanDistillModel(self.config.model_path, self.config, self.init_device)
-        return model
+        import time
+        start_time = time.time()
+        
+        logger.info(f"🔧 WanDistillRunner.load_transformer() starting...")
+        logger.info(f"📋 Model path: {self.config.model_path}")
+        logger.info(f"💻 Init device: {self.init_device}")
+        
+        try:
+            if self.config.get("lora_configs") and self.config.lora_configs:
+                logger.info("📦 Loading transformer with LoRA configurations...")
+                
+                logger.info("🏗️  Creating WanModel...")
+                wan_start = time.time()
+                model = WanModel(
+                    self.config.model_path,
+                    self.config,
+                    self.init_device,
+                )
+                wan_time = time.time() - wan_start
+                logger.info(f"✅ WanModel created in {wan_time:.1f}s")
+                
+                logger.info("🔗 Creating LoRA wrapper...")
+                lora_wrapper = WanLoraWrapper(model)
+                
+                for i, lora_config in enumerate(self.config.lora_configs):
+                    logger.info(f"🔄 Processing LoRA config {i+1}/{len(self.config.lora_configs)}...")
+                    lora_path = lora_config["path"]
+                    strength = lora_config.get("strength", 1.0)
+                    logger.info(f"📍 LoRA path: {lora_path}, strength: {strength}")
+                    
+                    load_start = time.time()
+                    lora_name = lora_wrapper.load_lora(lora_path)
+                    load_time = time.time() - load_start
+                    logger.info(f"✅ LoRA loaded in {load_time:.1f}s: {lora_name}")
+                    
+                    apply_start = time.time()
+                    lora_wrapper.apply_lora(lora_name, strength)
+                    apply_time = time.time() - apply_start
+                    logger.info(f"✅ LoRA applied in {apply_time:.1f}s: {lora_name} with strength: {strength}")
+            else:
+                logger.info("📦 Loading transformer with WanDistillModel (this loads the 31GB model)...")
+                
+                logger.info(f"📍 Creating WanDistillModel with path: {self.config.model_path}")
+                distill_start = time.time()
+                model = WanDistillModel(self.config.model_path, self.config, self.init_device)
+                distill_time = time.time() - distill_start
+                logger.info(f"✅ WanDistillModel created in {distill_time:.1f}s")
+            
+            total_time = time.time() - start_time
+            logger.info(f"🎉 WanDistillRunner.load_transformer() completed in {total_time:.1f}s")
+            return model
+            
+        except Exception as e:
+            logger.error(f"❌ Failed in WanDistillRunner.load_transformer(): {e}")
+            import traceback
+            logger.error(f"📜 Traceback: {traceback.format_exc()}")
+            raise
 
     def init_scheduler(self):
         if self.config.feature_caching == "NoCaching":

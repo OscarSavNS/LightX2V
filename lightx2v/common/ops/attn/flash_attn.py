@@ -1,20 +1,36 @@
 from loguru import logger
 
-try:
-    import flash_attn  # noqa: F401
-    from flash_attn.flash_attn_interface import flash_attn_varlen_func
-except ImportError:
-    logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
-    flash_attn_varlen_func = None
+# Flash attention functions - loaded lazily
+_flash_attn_varlen_func = None
+_flash_attn_varlen_func_v3 = None
+_flash_attn_loaded = False
 
-try:
-    from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
-except ImportError:
-    logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
-    flash_attn_varlen_func_v3 = None
+def _load_flash_attn():
+    """Lazy load flash attention functions only when needed"""
+    global _flash_attn_varlen_func, _flash_attn_varlen_func_v3, _flash_attn_loaded
+    
+    if _flash_attn_loaded:
+        return
+    
+    try:
+        import flash_attn  # noqa: F401
+        from flash_attn.flash_attn_interface import flash_attn_varlen_func
+        _flash_attn_varlen_func = flash_attn_varlen_func
+    except ImportError:
+        logger.info("flash_attn_varlen_func not found, please install flash_attn2 first")
+        _flash_attn_varlen_func = None
 
+    try:
+        from flash_attn_interface import flash_attn_varlen_func as flash_attn_varlen_func_v3
+        _flash_attn_varlen_func_v3 = flash_attn_varlen_func_v3
+    except ImportError:
+        logger.info("flash_attn_varlen_func_v3 not found, please install flash_attn3 first")
+        _flash_attn_varlen_func_v3 = None
+    
+    _flash_attn_loaded = True
+
+# Lazy imports
 from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
-
 from .template import AttnWeightTemplate
 
 
@@ -35,7 +51,11 @@ class FlashAttn2Weight(AttnWeightTemplate):
         model_cls=None,
         mask_map=None,
     ):
-        x = flash_attn_varlen_func(
+        _load_flash_attn()  # Only load when actually needed
+        if _flash_attn_varlen_func is None:
+            raise RuntimeError("flash_attn2 not available, please install flash_attn")
+        
+        x = _flash_attn_varlen_func(
             q,
             k,
             v,
@@ -64,7 +84,11 @@ class FlashAttn3Weight(AttnWeightTemplate):
         model_cls=None,
         mask_map=None,
     ):
-        x = flash_attn_varlen_func_v3(
+        _load_flash_attn()  # Only load when actually needed
+        if _flash_attn_varlen_func_v3 is None:
+            raise RuntimeError("flash_attn3 not available, please install flash_attn3")
+        
+        x = _flash_attn_varlen_func_v3(
             q,
             k,
             v,

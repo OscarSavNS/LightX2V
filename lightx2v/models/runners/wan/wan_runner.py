@@ -8,22 +8,23 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from loguru import logger
 
-from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
-from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
+# Lazy imports - moved to function level to avoid hanging during startup
+# from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
+# from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
 from lightx2v.models.networks.wan.lora_adapter import WanLoraWrapper
 from lightx2v.models.networks.wan.model import WanModel
 from lightx2v.models.runners.default_runner import DefaultRunner
-from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
-    WanScheduler4ChangingResolutionInterface,
-)
-from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
-    WanSchedulerCaching,
-    WanSchedulerTaylorCaching,
-)
-from lightx2v.models.schedulers.wan.scheduler import WanScheduler
-from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
-from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
-from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
+# from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
+#     WanScheduler4ChangingResolutionInterface,
+# )
+# from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
+#     WanSchedulerCaching,
+#     WanSchedulerTaylorCaching,
+# )
+# from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+# from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+# from lightx2v.models.video_encoders.hf.wan.vae_2_2 import Wan2_2_VAE
+# from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
 from lightx2v.utils.envs import *
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
 from lightx2v.utils.utils import *
@@ -53,23 +54,41 @@ class WanRunner(DefaultRunner):
         return model
 
     def load_image_encoder(self):
+        import time
+        start_time = time.time()
+        
         image_encoder = None
         if self.config.task == "i2v" and self.config.get("use_image_encoder", True):
+            logger.info("🖼️  Loading CLIP image encoder for i2v task...")
+            
             # quant_config
             clip_quantized = self.config.get("clip_quantized", False)
             if clip_quantized:
+                logger.info("⚡ Using quantized CLIP model")
                 clip_quant_scheme = self.config.get("clip_quant_scheme", None)
                 assert clip_quant_scheme is not None
                 tmp_clip_quant_scheme = clip_quant_scheme.split("-")[0]
                 clip_model_name = f"clip-{tmp_clip_quant_scheme}.pth"
                 clip_quantized_ckpt = find_torch_model_path(self.config, "clip_quantized_ckpt", clip_model_name)
                 clip_original_ckpt = None
+                logger.info(f"📁 Quantized CLIP path: {clip_quantized_ckpt}")
             else:
+                logger.info("🔍 Using full precision CLIP model")
                 clip_quantized_ckpt = None
                 clip_quant_scheme = None
                 clip_model_name = "models_clip_open-clip-xlm-roberta-large-vit-huge-14.pth"
                 clip_original_ckpt = find_torch_model_path(self.config, "clip_original_ckpt", clip_model_name)
+                
+                if clip_original_ckpt and os.path.exists(clip_original_ckpt):
+                    clip_size = os.path.getsize(clip_original_ckpt) / 1024**3
+                    logger.info(f"📁 CLIP model path: {clip_original_ckpt} ({clip_size:.2f}GB)")
+                else:
+                    logger.warning(f"⚠️  CLIP model not found at: {clip_original_ckpt}")
 
+            logger.info("🔄 Initializing CLIP model...")
+            # Lazy import to avoid hanging during startup
+            from lightx2v.models.input_encoders.hf.xlm_roberta.model import CLIPModel
+            init_start = time.time()
             image_encoder = CLIPModel(
                 dtype=torch.float16,
                 device=self.init_device,
@@ -80,20 +99,36 @@ class WanRunner(DefaultRunner):
                 cpu_offload=self.config.get("clip_cpu_offload", self.config.get("cpu_offload", False)),
                 use_31_block=self.config.get("use_31_block", True),
             )
+            init_time = time.time() - init_start
+            logger.info(f"✅ CLIP image encoder loaded in {init_time:.1f}s")
+        else:
+            logger.info("⏭️  Skipping image encoder (not needed for task or disabled)")
 
+        total_time = time.time() - start_time
+        if image_encoder:
+            logger.info(f"🎯 Image encoder loading completed in {total_time:.1f}s")
+        
         return image_encoder
 
     def load_text_encoder(self):
+        import time
+        start_time = time.time()
+        
+        logger.info("📝 Loading T5 text encoder...")
+        
         # offload config
         t5_offload = self.config.get("t5_cpu_offload", self.config.get("cpu_offload"))
         if t5_offload:
             t5_device = torch.device("cpu")
+            logger.info("💾 T5 will use CPU offloading")
         else:
             t5_device = torch.device("cuda")
+            logger.info("🚀 T5 will use GPU memory")
 
         # quant_config
         t5_quantized = self.config.get("t5_quantized", False)
         if t5_quantized:
+            logger.info("⚡ Using quantized T5 model")
             t5_quant_scheme = self.config.get("t5_quant_scheme", None)
             assert t5_quant_scheme is not None
             tmp_t5_quant_scheme = t5_quant_scheme.split("-")[0]
@@ -101,13 +136,27 @@ class WanRunner(DefaultRunner):
             t5_quantized_ckpt = find_torch_model_path(self.config, "t5_quantized_ckpt", t5_model_name)
             t5_original_ckpt = None
             tokenizer_path = os.path.join(os.path.dirname(t5_quantized_ckpt), "google/umt5-xxl")
+            logger.info(f"📁 Quantized T5 path: {t5_quantized_ckpt}")
         else:
+            logger.info("🔍 Using full precision T5 model")
             t5_quant_scheme = None
             t5_quantized_ckpt = None
             t5_model_name = "models_t5_umt5-xxl-enc-bf16.pth"
             t5_original_ckpt = find_torch_model_path(self.config, "t5_original_ckpt", t5_model_name)
             tokenizer_path = os.path.join(os.path.dirname(t5_original_ckpt), "google/umt5-xxl")
-
+            
+            if t5_original_ckpt and os.path.exists(t5_original_ckpt):
+                t5_size = os.path.getsize(t5_original_ckpt) / 1024**3
+                logger.info(f"📁 T5 model path: {t5_original_ckpt} ({t5_size:.2f}GB)")
+            else:
+                logger.warning(f"⚠️  T5 model not found at: {t5_original_ckpt}")
+        
+        logger.info(f"📚 T5 tokenizer path: {tokenizer_path}")
+        logger.info("🔄 Initializing T5 encoder model...")
+        # Lazy import to avoid hanging during startup
+        from lightx2v.models.input_encoders.hf.t5.model import T5EncoderModel
+        init_start = time.time()
+        
         text_encoder = T5EncoderModel(
             text_len=self.config["text_len"],
             dtype=torch.bfloat16,
@@ -121,28 +170,61 @@ class WanRunner(DefaultRunner):
             t5_quantized_ckpt=t5_quantized_ckpt,
             quant_scheme=t5_quant_scheme,
         )
+        
+        init_time = time.time() - init_start
+        total_time = time.time() - start_time
+        logger.info(f"✅ T5 text encoder loaded in {init_time:.1f}s")
+        logger.info(f"🎯 Text encoder loading completed in {total_time:.1f}s")
+        
         text_encoders = [text_encoder]
         return text_encoders
 
     def load_vae_encoder(self):
+        import time
+        start_time = time.time()
+        
+        if self.config.task != "i2v":
+            logger.info("⏭️  Skipping VAE encoder (not needed for t2v task)")
+            return None
+            
+        logger.info("🎨 Loading VAE encoder for i2v task...")
+        
         # offload config
         vae_offload = self.config.get("vae_cpu_offload", self.config.get("cpu_offload"))
         if vae_offload:
             vae_device = torch.device("cpu")
+            logger.info("💾 VAE will use CPU offloading")
         else:
             vae_device = torch.device("cuda")
+            logger.info("🚀 VAE will use GPU memory")
+
+        vae_path = find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth")
+        if vae_path and os.path.exists(vae_path):
+            vae_size = os.path.getsize(vae_path) / 1024**3
+            logger.info(f"📁 VAE model path: {vae_path} ({vae_size:.2f}GB)")
+        else:
+            logger.warning(f"⚠️  VAE model not found at: {vae_path}")
 
         vae_config = {
-            "vae_pth": find_torch_model_path(self.config, "vae_pth", "Wan2.1_VAE.pth"),
+            "vae_pth": vae_path,
             "device": vae_device,
             "parallel": self.config.parallel and self.config.parallel.get("vae_p_size", False) and self.config.parallel.vae_p_size > 1,
             "use_tiling": self.config.get("use_tiling_vae", False),
             "cpu_offload": vae_offload,
         }
-        if self.config.task != "i2v":
-            return None
-        else:
-            return WanVAE(**vae_config)
+        
+        logger.info("🔄 Initializing VAE encoder...")
+        # Lazy import to avoid hanging during startup
+        from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
+        init_start = time.time()
+        vae_encoder = WanVAE(**vae_config)
+        init_time = time.time() - init_start
+        
+        total_time = time.time() - start_time
+        logger.info(f"✅ VAE encoder loaded in {init_time:.1f}s")
+        logger.info(f"🎯 VAE encoder loading completed in {total_time:.1f}s")
+        
+        return vae_encoder
 
     def load_vae_decoder(self):
         # offload config
@@ -160,12 +242,14 @@ class WanRunner(DefaultRunner):
             "cpu_offload": vae_offload,
         }
         if self.config.get("use_tiny_vae", False):
+            from lightx2v.models.video_encoders.hf.wan.vae_tiny import WanVAE_tiny
             tiny_vae_path = find_torch_model_path(self.config, "tiny_vae_path", "taew2_1.pth")
             vae_decoder = WanVAE_tiny(
                 vae_pth=tiny_vae_path,
                 device=self.init_device,
             ).to("cuda")
         else:
+            from lightx2v.models.video_encoders.hf.wan.vae import WanVAE
             vae_decoder = WanVAE(**vae_config)
         return vae_decoder
 
@@ -178,6 +262,13 @@ class WanRunner(DefaultRunner):
         return vae_encoder, vae_decoder
 
     def init_scheduler(self):
+        # Lazy imports to avoid hanging during startup
+        from lightx2v.models.schedulers.wan.scheduler import WanScheduler
+        from lightx2v.models.schedulers.wan.feature_caching.scheduler import (
+            WanSchedulerCaching,
+            WanSchedulerTaylorCaching,
+        )
+        
         if self.config.feature_caching == "NoCaching":
             scheduler_class = WanScheduler
         elif self.config.feature_caching == "TaylorSeer":
@@ -188,6 +279,9 @@ class WanRunner(DefaultRunner):
             raise NotImplementedError(f"Unsupported feature_caching type: {self.config.feature_caching}")
 
         if self.config.get("changing_resolution", False):
+            from lightx2v.models.schedulers.wan.changing_resolution.scheduler import (
+                WanScheduler4ChangingResolutionInterface,
+            )
             scheduler = WanScheduler4ChangingResolutionInterface(scheduler_class, self.config)
         else:
             scheduler = scheduler_class(self.config)

@@ -295,6 +295,26 @@ class ApiServer:
         async def get_service_metadata():
             assert self.inference_service is not None, "Inference service is not initialized"
             return self.inference_service.server_metadata()
+        
+        # Add health endpoint for startup script compatibility
+        @self.app.get("/health")
+        async def health_check():
+            """Health check endpoint that returns HTTP 200 when server is ready"""
+            try:
+                # Check if inference service is initialized and ready
+                if self.inference_service is None:
+                    return {"status": "starting", "message": "Inference service not yet initialized"}
+                
+                # Check if the service is ready to handle requests
+                service_status = task_manager.get_service_status()
+                if service_status.get("service_status") == "idle":
+                    return {"status": "healthy", "message": "Server is ready to accept requests"}
+                else:
+                    return {"status": "loading", "message": "Server is still initializing models"}
+                    
+            except Exception as e:
+                logger.error(f"Health check failed: {e}")
+                return {"status": "error", "message": f"Health check failed: {str(e)}"}
 
     async def _validate_image_url(self, image_url: str) -> bool:
         if not image_url or not image_url.startswith("http"):

@@ -83,7 +83,7 @@ def test_amd_gpu_setup():
     # Test quantization ops
     print("\n=== Testing Quantization Operations ===")
     try:
-        from lightx2v.common.ops.mm.mm_weight import *
+        import lightx2v.common.ops.mm.mm_weight
         print("✓ Matrix multiplication operations imported")
         
         # Test if vLLM ops are available

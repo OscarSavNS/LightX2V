@@ -7,7 +7,8 @@ import torch.nn.functional as F
 from loguru import logger
 from safetensors import safe_open
 
-from lightx2v.common.ops.attn import MaskMap
+# Lazy import - moved to function level to avoid hanging during startup
+# from lightx2v.common.ops.attn import MaskMap
 from lightx2v.models.networks.wan.infer.feature_caching.transformer_infer import (
     WanTransformerInferAdaCaching,
     WanTransformerInferCustomCaching,
@@ -42,47 +43,98 @@ class WanModel:
     transformer_weight_class = WanTransformerWeights
 
     def __init__(self, model_path, config, device):
-        self.model_path = model_path
-        self.config = config
-        self.cpu_offload = self.config.get("cpu_offload", False)
-        self.offload_granularity = self.config.get("offload_granularity", "block")
+        import time
+        start_time = time.time()
+        
+        logger.info(f"🏗️  WanModel.__init__() starting...")
+        logger.info(f"📋 Model path: {model_path}")
+        logger.info(f"💻 Device: {device}")
+        
+        try:
+            logger.info("⚙️  Setting up basic configuration...")
+            setup_start = time.time()
+            
+            self.model_path = model_path
+            self.config = config
+            self.cpu_offload = self.config.get("cpu_offload", False)
+            self.offload_granularity = self.config.get("offload_granularity", "block")
+            logger.info(f"💾 CPU offload: {self.cpu_offload}, granularity: {self.offload_granularity}")
 
-        if self.config["seq_parallel"]:
-            self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
-        else:
-            self.seq_p_group = None
-
-        self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
-        self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
-
-        if self.dit_quantized:
-            dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
-            if self.config.model_cls == "wan2.1_distill":
-                dit_quant_scheme = "distill_" + dit_quant_scheme
-            if dit_quant_scheme == "gguf":
-                self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
-                self.config.use_gguf = True
+            if self.config["seq_parallel"]:
+                self.seq_p_group = self.config.get("device_mesh").get_group(mesh_dim="seq_p")
+                logger.info("🔗 Sequence parallel enabled")
             else:
-                self.dit_quantized_ckpt = find_hf_model_path(config, self.model_path, "dit_quantized_ckpt", subdir=dit_quant_scheme)
-            quant_config_path = os.path.join(self.dit_quantized_ckpt, "config.json")
-            if os.path.exists(quant_config_path):
-                with open(quant_config_path, "r") as f:
-                    quant_model_config = json.load(f)
-                self.config.update(quant_model_config)
-        else:
-            self.dit_quantized_ckpt = None
-            assert not self.config.get("lazy_load", False)
+                self.seq_p_group = None
+                logger.info("🚫 Sequence parallel disabled")
 
-        self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
+            self.clean_cuda_cache = self.config.get("clean_cuda_cache", False)
+            self.dit_quantized = self.config.mm_config.get("mm_type", "Default") != "Default"
+            logger.info(f"🛠️  Clean CUDA cache: {self.clean_cuda_cache}, DiT quantized: {self.dit_quantized}")
 
-        self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
-        if self.dit_quantized:
-            assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
+            if self.dit_quantized:
+                logger.info("⚡ Processing quantized model configuration...")
+                dit_quant_scheme = self.config.mm_config.get("mm_type").split("-")[1]
+                if self.config.model_cls == "wan2.1_distill":
+                    dit_quant_scheme = "distill_" + dit_quant_scheme
+                logger.info(f"📊 Quantization scheme: {dit_quant_scheme}")
+                
+                if dit_quant_scheme == "gguf":
+                    self.dit_quantized_ckpt = find_gguf_model_path(config, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+                    self.config.use_gguf = True
+                    logger.info(f"📦 Using GGUF model: {self.dit_quantized_ckpt}")
+                else:
+                    self.dit_quantized_ckpt = find_hf_model_path(config, self.model_path, "dit_quantized_ckpt", subdir=dit_quant_scheme)
+                    logger.info(f"📦 Using HF quantized model: {self.dit_quantized_ckpt}")
+                    
+                quant_config_path = os.path.join(self.dit_quantized_ckpt, "config.json")
+                if os.path.exists(quant_config_path):
+                    logger.info(f"📝 Loading quantization config: {quant_config_path}")
+                    with open(quant_config_path, "r") as f:
+                        quant_model_config = json.load(f)
+                    self.config.update(quant_model_config)
+                    logger.info("✅ Quantization config loaded")
+            else:
+                logger.info("🚫 No quantization, using full precision model")
+                self.dit_quantized_ckpt = None
+                assert not self.config.get("lazy_load", False)
 
-        self.device = device
-        self._init_infer_class()
-        self._init_weights()
-        self._init_infer()
+            self.config.dit_quantized_ckpt = self.dit_quantized_ckpt
+
+            self.weight_auto_quant = self.config.mm_config.get("weight_auto_quant", False)
+            if self.dit_quantized:
+                assert self.weight_auto_quant or self.dit_quantized_ckpt is not None
+                logger.info(f"⚡ Weight auto quant: {self.weight_auto_quant}")
+
+            self.device = device
+            setup_time = time.time() - setup_start
+            logger.info(f"✅ Basic configuration completed in {setup_time:.1f}s")
+            
+            logger.info("🛠️  Initializing infer classes...")
+            infer_class_start = time.time()
+            self._init_infer_class()
+            infer_class_time = time.time() - infer_class_start
+            logger.info(f"✅ Infer classes initialized in {infer_class_time:.1f}s")
+            
+            logger.info("💾 Initializing weights (this loads the 31GB model)...")
+            weights_start = time.time()
+            self._init_weights()
+            weights_time = time.time() - weights_start
+            logger.info(f"✅ Weights initialized in {weights_time:.1f}s")
+            
+            logger.info("🔄 Initializing inference engine...")
+            infer_start = time.time()
+            self._init_infer()
+            infer_time = time.time() - infer_start
+            logger.info(f"✅ Inference engine initialized in {infer_time:.1f}s")
+            
+            total_time = time.time() - start_time
+            logger.info(f"🎉 WanModel.__init__() completed in {total_time:.1f}s")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed in WanModel.__init__(): {e}")
+            import traceback
+            logger.error(f"📜 Traceback: {traceback.format_exc()}")
+            raise
 
     def _init_infer_class(self):
         self.pre_infer_class = WanPreInfer
@@ -120,11 +172,82 @@ class WanModel:
         return False
 
     def _load_safetensor_to_dict(self, file_path, unified_dtype, sensitive_layer):
-        with safe_open(file_path, framework="pt") as f:
-            return {
-                key: (f.get_tensor(key).to(GET_DTYPE()) if unified_dtype or all(s not in key for s in sensitive_layer) else f.get_tensor(key).to(GET_SENSITIVE_DTYPE())).pin_memory().to(self.device)
-                for key in f.keys()
-            }
+        import time
+        import torch
+        from loguru import logger
+        
+        logger.info(f"🔄 Starting tensor loading from {os.path.basename(file_path)}")
+        start_time = time.time()
+        
+        try:
+            with safe_open(file_path, framework="pt") as f:
+                tensor_keys = list(f.keys())
+                logger.info(f"📊 Found {len(tensor_keys)} tensors to load")
+                
+                weight_dict = {}
+                total_tensors = len(tensor_keys)
+                
+                # Process tensors in smaller batches to avoid GPU memory issues
+                batch_size = 50  # Process 50 tensors at a time
+                
+                for i in range(0, total_tensors, batch_size):
+                    batch_keys = tensor_keys[i:i + batch_size]
+                    batch_start = time.time()
+                    
+                    logger.info(f"📦 Loading tensor batch {i//batch_size + 1}/{(total_tensors + batch_size - 1)//batch_size} ({len(batch_keys)} tensors)")
+                    
+                    for j, key in enumerate(batch_keys):
+                        try:
+                            # Load tensor from file
+                            tensor = f.get_tensor(key)
+                            
+                            # Apply dtype conversion
+                            if unified_dtype or all(s not in key for s in sensitive_layer):
+                                tensor = tensor.to(GET_DTYPE())
+                            else:
+                                tensor = tensor.to(GET_SENSITIVE_DTYPE())
+                            
+                            # AMD GPU-friendly memory transfer (avoid pin_memory for large tensors)
+                            tensor_size_mb = tensor.numel() * tensor.element_size() / (1024 * 1024)
+                            if tensor_size_mb > 100:  # For tensors larger than 100MB
+                                logger.debug(f"🔄 Large tensor {key}: {tensor_size_mb:.1f}MB, transferring directly")
+                                tensor = tensor.to(self.device, non_blocking=False)
+                            else:
+                                # Use pin_memory for smaller tensors
+                                tensor = tensor.pin_memory().to(self.device, non_blocking=True)
+                            
+                            weight_dict[key] = tensor
+                            
+                            # Log progress for every 10th tensor in batch
+                            if (j + 1) % 10 == 0 or j == len(batch_keys) - 1:
+                                logger.debug(f"  ✅ Loaded {j + 1}/{len(batch_keys)} tensors in batch")
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Failed to load tensor {key}: {e}")
+                            # Try to free any partially allocated memory
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                            raise
+                    
+                    batch_time = time.time() - batch_start
+                    logger.info(f"✅ Batch {i//batch_size + 1} completed in {batch_time:.1f}s")
+                    
+                    # Clear GPU cache between batches to prevent memory fragmentation
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                
+                total_time = time.time() - start_time
+                logger.info(f"🎯 Tensor loading completed: {len(weight_dict)} tensors in {total_time:.1f}s")
+                
+                return weight_dict
+                
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"❌ Failed to load safetensors file after {elapsed:.1f}s: {e}")
+            # Emergency GPU memory cleanup
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            raise
 
     def _load_ckpt(self, unified_dtype, sensitive_layer):
         safetensors_path = find_hf_model_path(self.config, self.model_path, "dit_original_ckpt", subdir="original")
@@ -317,6 +440,8 @@ class WanModel:
                 self.transformer_weights.post_weights_to_cuda()
 
         if self.transformer_infer.mask_map is None:
+            # Lazy import to avoid hanging during startup
+            from lightx2v.common.ops.attn import MaskMap
             _, c, h, w = self.scheduler.latents.shape
             video_token_num = c * (h // 2) * (w // 2)
             self.transformer_infer.mask_map = MaskMap(video_token_num, c)

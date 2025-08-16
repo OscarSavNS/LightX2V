@@ -30,17 +30,45 @@ class DefaultRunner(BaseRunner):
         self.set_init_device()
 
     def init_modules(self):
-        logger.info("Initializing runner modules...")
+        import time
+        start_time = time.time()
+        
+        logger.info("🔧 Initializing runner modules...")
+        
+        # Log initial memory state
+        if torch.cuda.is_available():
+            initial_memory = torch.cuda.memory_allocated() / 1024**3
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            logger.info(f"💾 Initial GPU memory: {initial_memory:.2f}GB / {total_memory:.1f}GB")
+        
         if not self.config.get("lazy_load", False) and not self.config.get("unload_modules", False):
+            logger.info("🏗️  Loading model components...")
+            model_start = time.time()
             self.load_model()
+            model_time = time.time() - model_start
+            logger.info(f"✅ Model components loaded in {model_time:.1f}s")
         elif self.config.get("lazy_load", False):
+            logger.info("💤 Lazy loading enabled - models will load on demand")
             assert self.config.get("cpu_offload", False)
+        
+        logger.info("🔗 Setting up inference pipelines...")
         self.run_dit = self._run_dit_local
         self.run_vae_decoder = self._run_vae_decoder_local
         if self.config["task"] == "i2v":
             self.run_input_encoder = self._run_input_encoder_local_i2v
+            logger.info("📸 Configured for image-to-video (i2v) pipeline")
         else:
             self.run_input_encoder = self._run_input_encoder_local_t2v
+            logger.info("📝 Configured for text-to-video (t2v) pipeline")
+        
+        # Log final memory state
+        if torch.cuda.is_available():
+            final_memory = torch.cuda.memory_allocated() / 1024**3
+            memory_used = final_memory - initial_memory
+            logger.info(f"💾 Final GPU memory: {final_memory:.2f}GB / {total_memory:.1f}GB (used: +{memory_used:.2f}GB)")
+        
+        total_time = time.time() - start_time
+        logger.info(f"🎯 Module initialization completed in {total_time:.1f}s")
 
     def set_init_device(self):
         if self.config.cpu_offload:
