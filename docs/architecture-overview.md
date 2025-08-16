@@ -22,7 +22,7 @@ graph TB
         VAEEnc[🎬 VAE Encoder<br/>Pixel → Latent Space]
     end
 
-    %% Runner Layer (Orchestration)
+    %% Runner Layer - Orchestration
     subgraph "Runner Layer - Orchestration"
         RunnerFactory[🏭 Runner Factory<br/>RUNNER_REGISTER]
         BaseRunner[🏃 Base Runner]
@@ -113,12 +113,12 @@ graph TB
     %% Output Layer
     subgraph "Output Layer"
         VAEDec[🎬 VAE Decoder<br/>Latent → Pixel Space]
-        FrameInterp[🎞️ Frame Interpolation<br/>RIFE (Optional)]
+        FrameInterp[🎞️ Frame Interpolation<br/>RIFE Optional]
         VideoSave[💾 Video Output<br/>MP4 Generation]
     end
 
     %% Server Infrastructure
-    subgraph "Server Infrastructure (Optional)"
+    subgraph "Server Infrastructure Optional"
         APIServer[🌐 API Server<br/>FastAPI REST]
         TaskManager[📋 Task Manager<br/>Queue Processing]
         GPUManager[🖥️ GPU Manager<br/>Resource Allocation]
