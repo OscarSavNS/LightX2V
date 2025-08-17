@@ -560,22 +560,34 @@ class VideoGenerationService:
         self.inference_service = inference_service
 
     async def generate_video_with_stop_event(self, message: TaskRequest, stop_event) -> Optional[TaskResponse]:
+        import time
+        start_time = time.time()
+        
         try:
+            logger.info(f"🎬 Task {message.task_id}: Starting video generation pipeline...")
+            logger.info(f"📋 Task {message.task_id}: Parameters - prompt='{message.prompt}', steps={message.infer_steps}, length={message.target_video_length}")
+            
             task_data = {field: getattr(message, field) for field in message.model_fields_set if field != "task_id"}
             task_data["task_id"] = message.task_id
 
             if stop_event.is_set():
-                logger.info(f"Task {message.task_id} cancelled before processing")
+                logger.info(f"❌ Task {message.task_id} cancelled before processing")
                 return None
 
             if "image_path" in message.model_fields_set and message.image_path:
+                logger.info(f"🖼️ Task {message.task_id}: Processing input image...")
                 if message.image_path.startswith("http"):
+                    logger.info(f"🌐 Task {message.task_id}: Downloading image from URL: {message.image_path}")
                     image_path = await self.file_service.download_image(message.image_path)
                     task_data["image_path"] = str(image_path)
+                    logger.info(f"✅ Task {message.task_id}: Image downloaded successfully")
                 elif is_base64_image(message.image_path):
+                    logger.info(f"📦 Task {message.task_id}: Processing base64 image...")
                     image_path = save_base64_image(message.image_path, str(self.file_service.input_image_dir))
                     task_data["image_path"] = str(image_path)
+                    logger.info(f"✅ Task {message.task_id}: Base64 image saved")
                 else:
+                    logger.info(f"📁 Task {message.task_id}: Using local image: {message.image_path}")
                     task_data["image_path"] = message.image_path
 
             if "audio_path" in message.model_fields_set and message.audio_path:
@@ -591,19 +603,51 @@ class VideoGenerationService:
             actual_save_path = self.file_service.get_output_path(message.save_video_path)
             task_data["save_video_path"] = str(actual_save_path)
             task_data["video_path"] = message.save_video_path
+            logger.info(f"💾 Task {message.task_id}: Output will be saved to: {actual_save_path}")
 
+            logger.info(f"🚀 Task {message.task_id}: Submitting to inference service...")
             if not self.inference_service.submit_task(task_data):
                 raise RuntimeError("Distributed inference service is not started")
+            logger.info(f"✅ Task {message.task_id}: Successfully submitted to worker process")
 
-            result = self.inference_service.wait_for_result_with_stop(message.task_id, stop_event, timeout=300)
+            # Use configurable timeout instead of hardcoded 300 seconds
+            from lightx2v.server.config import server_config
+            timeout = server_config.task_timeout
+            logger.info(f"⏱️ Task {message.task_id}: Starting video generation with {timeout}s timeout...")
+            logger.info(f"🎯 Task {message.task_id}: This may take 5-15 minutes for large models on AMD GPUs...")
+            
+            # Add periodic progress logging
+            result = None
+            elapsed_time = 0
+            check_interval = 30  # Check every 30 seconds
+            
+            while elapsed_time < timeout:
+                if self.inference_service.result_event.wait(timeout=check_interval):
+                    result = self.inference_service.wait_for_result_with_stop(message.task_id, stop_event, timeout=0.1)
+                    if result is not None:
+                        break
+                
+                elapsed_time += check_interval
+                elapsed_minutes = elapsed_time / 60
+                remaining_minutes = (timeout - elapsed_time) / 60
+                logger.info(f"⏳ Task {message.task_id}: Generation in progress... ({elapsed_minutes:.1f}min elapsed, {remaining_minutes:.1f}min remaining)")
+                
+                if stop_event.is_set():
+                    logger.info(f"❌ Task {message.task_id}: Cancelled during generation")
+                    return None
 
             if result is None:
                 if stop_event.is_set():
-                    logger.info(f"Task {message.task_id} cancelled during processing")
+                    logger.info(f"❌ Task {message.task_id}: Cancelled during processing")
                     return None
+                total_minutes = timeout / 60
+                logger.error(f"⏰ Task {message.task_id}: Timeout after {total_minutes:.1f} minutes")
                 raise RuntimeError("Task processing timeout")
 
+            total_time = time.time() - start_time
             if result.get("status") == "success":
+                logger.info(f"🎉 Task {message.task_id}: Video generation completed successfully in {total_time:.1f}s ({total_time/60:.1f}min)")
+                logger.info(f"📹 Task {message.task_id}: Video saved to: {actual_save_path}")
                 return TaskResponse(
                     task_id=message.task_id,
                     task_status="completed",
@@ -611,8 +655,10 @@ class VideoGenerationService:
                 )
             else:
                 error_msg = result.get("error", "Inference failed")
+                logger.error(f"❌ Task {message.task_id}: Generation failed after {total_time:.1f}s: {error_msg}")
                 raise RuntimeError(error_msg)
 
         except Exception as e:
-            logger.error(f"Task {message.task_id} processing failed: {str(e)}")
+            total_time = time.time() - start_time
+            logger.error(f"💥 Task {message.task_id}: Processing failed after {total_time:.1f}s: {str(e)}")
             raise

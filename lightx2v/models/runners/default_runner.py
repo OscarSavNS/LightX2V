@@ -133,23 +133,37 @@ class DefaultRunner(BaseRunner):
         self.progress_callback = callback
 
     def run(self, total_steps=None):
+        import time
         if total_steps is None:
             total_steps = self.model.scheduler.infer_steps
+        
+        logger.info(f"🔄 Starting {total_steps}-step diffusion process...")
+        
         for step_index in range(total_steps):
-            logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+            step_start = time.time()
+            progress_percent = ((step_index + 1) / total_steps) * 100
+            logger.info(f"🎯 Diffusion step {step_index + 1}/{total_steps} ({progress_percent:.1f}%)")
 
             with ProfilingContext4Debug("step_pre"):
                 self.model.scheduler.step_pre(step_index=step_index)
 
+            step_infer_start = time.time()
             with ProfilingContext4Debug("🚀 infer_main"):
                 self.model.infer(self.inputs)
+            step_infer_time = time.time() - step_infer_start
 
             with ProfilingContext4Debug("step_post"):
                 self.model.scheduler.step_post()
+            
+            step_total_time = time.time() - step_start
+            remaining_steps = total_steps - (step_index + 1)
+            eta_seconds = remaining_steps * step_total_time
+            logger.info(f"✅ Step {step_index + 1} completed in {step_total_time:.1f}s (inference: {step_infer_time:.1f}s, ETA: {eta_seconds:.0f}s)")
 
             if self.progress_callback:
-                self.progress_callback(((step_index + 1) / total_steps) * 100, 100)
+                self.progress_callback(progress_percent, 100)
 
+        logger.info(f"🎉 All {total_steps} diffusion steps completed!")
         return self.model.scheduler.latents, self.model.scheduler.generator
 
     def run_step(self):
@@ -233,14 +247,40 @@ class DefaultRunner(BaseRunner):
                     return enhanced_prompt
 
     def run_pipeline(self, save_video=True):
+        import time
+        pipeline_start = time.time()
+        
+        logger.info(f"🚀 Starting video generation pipeline...")
+        logger.info(f"📋 Generation parameters: prompt='{self.config.get('prompt', '')}', steps={self.config.get('infer_steps', 5)}, length={self.config.get('target_video_length', 81)}")
+        
         if self.config["use_prompt_enhancer"]:
+            logger.info(f"✨ Running prompt enhancer...")
+            enhancer_start = time.time()
             self.config["prompt_enhanced"] = self.post_prompt_enhancer()
+            enhancer_time = time.time() - enhancer_start
+            logger.info(f"✅ Prompt enhancer completed in {enhancer_time:.1f}s")
 
+        logger.info(f"🎭 Running input encoders (CLIP, T5, VAE)...")
+        encoder_start = time.time()
         self.inputs = self.run_input_encoder()
+        encoder_time = time.time() - encoder_start
+        logger.info(f"✅ Input encoders completed in {encoder_time:.1f}s")
+        
+        logger.info(f"📏 Setting target video dimensions...")
         self.set_target_shape()
+        logger.info(f"✅ Target shape set: {self.config.get('target_height', 480)}x{self.config.get('target_width', 832)}")
+        
+        logger.info(f"🧠 Starting DiT (Diffusion Transformer) inference...")
+        dit_start = time.time()
         latents, generator = self.run_dit()
+        dit_time = time.time() - dit_start
+        logger.info(f"✅ DiT inference completed in {dit_time:.1f}s ({dit_time/60:.1f}min)")
 
+        logger.info(f"🎨 Running VAE decoder to generate video frames...")
+        vae_start = time.time()
         images = self.run_vae_decoder(latents, generator)
+        vae_time = time.time() - vae_start
+        logger.info(f"✅ VAE decoder completed in {vae_time:.1f}s")
         if self.config["model_cls"] != "wan2.2":
             images = vae_to_comfyui_image(images)
 
@@ -261,17 +301,27 @@ class DefaultRunner(BaseRunner):
                 fps = self.config.get("fps", 16)
 
             if not dist.is_initialized() or dist.get_rank() == 0:
-                logger.info(f"🎬 Start to save video 🎬")
+                logger.info(f"🎬 Encoding and saving video at {fps} FPS...")
+                video_save_start = time.time()
 
                 if self.config["model_cls"] != "wan2.2":
                     save_to_video(images, self.config.save_video_path, fps=fps, method="ffmpeg")  # type: ignore
                 else:
                     cache_video(tensor=images, save_file=self.config.save_video_path, fps=fps, nrow=1, normalize=True, value_range=(-1, 1))
-                logger.info(f"✅ Video saved successfully to: {self.config.save_video_path} ✅")
+                
+                video_save_time = time.time() - video_save_start
+                logger.info(f"✅ Video encoding completed in {video_save_time:.1f}s")
+                logger.info(f"📹 Video saved successfully to: {self.config.save_video_path}")
 
+        # Cleanup and performance summary
+        logger.info(f"🧹 Cleaning up GPU memory...")
         del latents, generator
         torch.cuda.empty_cache()
         gc.collect()
+        
+        total_pipeline_time = time.time() - pipeline_start
+        logger.info(f"🎊 PIPELINE COMPLETE! Total time: {total_pipeline_time:.1f}s ({total_pipeline_time/60:.1f}min)")
+        logger.info(f"📊 Performance breakdown: Encoders={encoder_time:.1f}s, DiT={dit_time:.1f}s, VAE={vae_time:.1f}s")
 
         # Return (images, audio) - audio is None for default runner
         return images, None

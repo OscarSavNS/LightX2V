@@ -5,18 +5,23 @@ from lightx2v.utils.registry_factory import ATTN_WEIGHT_REGISTER
 
 from .template import AttnWeightTemplate
 
-if torch.cuda.get_device_capability(0) == (8, 9):
-    try:
-        from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
-    except ImportError:
-        logger.info("sageattn not found, please install sageattention first")
-        sageattn = None
-else:
-    try:
-        from sageattention import sageattn
-    except ImportError:
-        logger.info("sageattn not found, please install sageattention first")
-        sageattn = None
+try:
+    if torch.cuda.is_available() and torch.cuda.get_device_capability(0) == (8, 9):
+        try:
+            from sageattention import sageattn_qk_int8_pv_fp16_triton as sageattn
+        except ImportError:
+            logger.info("sageattn not found, please install sageattention first")
+            sageattn = None
+    else:
+        try:
+            from sageattention import sageattn
+        except ImportError:
+            logger.info("sageattn not found, please install sageattention first")
+            sageattn = None
+except RuntimeError:
+    # No GPUs available - skip sageattn entirely
+    logger.info("No GPUs available, skipping sageattention")
+    sageattn = None
 
 
 @ATTN_WEIGHT_REGISTER("sage_attn2")

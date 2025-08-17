@@ -14,7 +14,7 @@ class ServerConfig:
     master_addr: str = "127.0.0.1"
     master_port_range: tuple = (29500, 29600)
 
-    task_timeout: int = 300
+    task_timeout: int = 1800  # 30 minutes for large model video generation
     task_history_limit: int = 1000
 
     http_timeout: int = 30
@@ -47,6 +47,12 @@ class ServerConfig:
 
         if env_cache_dir := os.environ.get("LIGHTX2V_CACHE_DIR"):
             config.cache_dir = env_cache_dir
+
+        if env_task_timeout := os.environ.get("LIGHTX2V_TASK_TIMEOUT"):
+            try:
+                config.task_timeout = int(env_task_timeout)
+            except ValueError:
+                logger.warning(f"Invalid task timeout in environment: {env_task_timeout}")
 
         return config
 
